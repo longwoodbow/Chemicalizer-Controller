@@ -1,11 +1,9 @@
 using UnityEngine;
-
 public class ControllerManager : MonoBehaviour
 {
     private Rect SectorX;
     private Rect SectorY;
     private Rect SectorZ;
-
     public float SectorSize;
     public float SectorDistance;
     private Texture texture;
@@ -13,7 +11,6 @@ public class ControllerManager : MonoBehaviour
     private string message = "Chemicalizer Controller";
     private GUIStyle messageStyle;
     private Rect messageRect;
-
     public enum SectorState
     {
         None,
@@ -45,12 +42,10 @@ public class ControllerManager : MonoBehaviour
         messageStyle.normal.textColor = Color.green;
         messageStyle.fontSize = Screen.height / 10;
         messageRect = new Rect(10, 10, 10, 10);
-
         Debug.Log("=== ControllerManager Start ===");
         InitializeUsbManager();
         CheckAccessoryIntent();
     }
-
     // Update is called once per frame
     void Update()
     {
@@ -76,7 +71,6 @@ public class ControllerManager : MonoBehaviour
         message = "Chemicalizer Controller\n" + (isConnected ? "Connected" : "Disconnected");
         SendInput(SectorStateToByte(sectorX), SectorStateToByte(sectorY), SectorStateToByte(sectorZ));
     }
-
     private SectorState GetSectorState(Touch touch)
     {
         if (touch.phase == TouchPhase.Began || touch.phase == TouchPhase.Stationary)
@@ -173,7 +167,6 @@ public class ControllerManager : MonoBehaviour
         // 現在がスライド系なら書き換えない
         return current;
     }
-
     private void OnGUI()
     {
         GUI.Label(messageRect, message, messageStyle);
@@ -190,7 +183,6 @@ public class ControllerManager : MonoBehaviour
         GUI.Label(SectorY, "Y", style);
         GUI.Label(SectorZ, "Z", style);
     }
-
     private byte SectorStateToByte(SectorState state)
     {
         return state switch
@@ -214,22 +206,18 @@ public class ControllerManager : MonoBehaviour
         public byte InputY;
         public byte InputZ;
     }
-
     private AndroidJavaObject usbManager;
     private AndroidJavaObject accessory;
     private AndroidJavaObject fileDescriptor;
     private AndroidJavaObject outputStream;
-
     private bool isConnected = false;
     private InputData lastSentData;
-
     void OnApplicationFocus(bool hasFocus)
     {
         Debug.Log($"OnApplicationFocus: {hasFocus}");
         if (hasFocus)
             CheckAccessoryIntent();
     }
-
     // 新しいIntentを受け取ったときに呼ばれる
     void OnNewIntent(AndroidJavaObject intent)
     {
@@ -254,31 +242,26 @@ public class ControllerManager : MonoBehaviour
             Debug.Log($"usbManager取得結果: {(usbManager != null ? "成功" : "失敗")}");
         }
     }
-
     private void CheckAccessoryIntent()
     {
         Debug.Log("<color=yellow>=== CheckAccessoryIntent 実行 ===</color>");
-
         if (usbManager == null)
         {
             Debug.LogWarning("usbManager が null → 再初期化");
             InitializeUsbManager();
             if (usbManager == null) return;
         }
-
         using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
         using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
         using (var intent = activity.Call<AndroidJavaObject>("getIntent"))
         {
             string action = intent.Call<string>("getAction");
             Debug.Log($"Intent Action: {action}");
-
             // 1. Intentから直接
             using (var usbManagerClass = new AndroidJavaClass("android.hardware.usb.UsbManager"))
             {
                 string extraAccessory = usbManagerClass.GetStatic<string>("EXTRA_ACCESSORY");
                 AndroidJavaObject accessoryObj = intent.Call<AndroidJavaObject>("getParcelableExtra", extraAccessory);
-
                 if (accessoryObj != null)
                 {
                     Debug.Log("<color=green>IntentからAccessory取得成功！</color>");
@@ -287,16 +270,13 @@ public class ControllerManager : MonoBehaviour
                     return;
                 }
             }
-
             // 2. usbManagerから直接一覧取得（重要）
             Debug.Log("AccessoryList を確認中...");
             AndroidJavaObject accessoryList = usbManager.Call<AndroidJavaObject>("getAccessoryList");
-
             if (accessoryList != null)
             {
                 int length = accessoryList.Call<int>("getLength");
                 Debug.Log($"<color=cyan>Accessory List Length: {length}</color>");
-
                 if (length > 0)
                 {
                     accessory = accessoryList.Call<AndroidJavaObject>("get", 0);
@@ -308,35 +288,28 @@ public class ControllerManager : MonoBehaviour
                     }
                 }
             }
-
             Debug.LogWarning("Accessoryが見つかりませんでした。PC側がAccessoryモードで待機しているか確認してください。");
         }
     }
     private void OpenAccessory()
     {
         Debug.Log("OpenAccessory を開始");
-
         if (usbManager == null || accessory == null)
         {
             Debug.LogError("OpenAccessory: usbManager または accessory が null");
             return;
         }
-
         try
         {
             Debug.Log("openAccessory を呼び出しています...");
             fileDescriptor = usbManager.Call<AndroidJavaObject>("openAccessory", accessory);
-
             if (fileDescriptor != null)
             {
                 Debug.Log("<color=green>openAccessory 成功！</color>");
-
                 var javaFileDescriptor = fileDescriptor.Call<AndroidJavaObject>("getFileDescriptor");
                 outputStream = new AndroidJavaObject("java.io.FileOutputStream", javaFileDescriptor);
-
                 isConnected = true;
                 Debug.Log("<color=green>=== USB Accessory接続 完了！ ===</color>");
-
                 SendInput(0, 0, 0);
             }
             else
@@ -349,12 +322,10 @@ public class ControllerManager : MonoBehaviour
             Debug.LogError($"OpenAccessory エラー: {e.Message}\nStackTrace: {e.StackTrace}");
         }
     }
-
     // SendInput, SendData はそのまま（変更なし）
     public void SendInput(byte x, byte y, byte z)
     {
         if (!isConnected || outputStream == null) return;
-
         byte[] buffer = new byte[] { x, y, z };
         try
         {
@@ -367,7 +338,6 @@ public class ControllerManager : MonoBehaviour
             isConnected = false;
         }
     }
-
     void OnApplicationQuit()
     {
         outputStream?.Call("close");
