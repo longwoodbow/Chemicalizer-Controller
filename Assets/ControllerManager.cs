@@ -1,4 +1,4 @@
-using UnityEngine;
+ï»¿using UnityEngine;
 public class ControllerManager : MonoBehaviour
 {
     private Rect SectorX;
@@ -11,18 +11,26 @@ public class ControllerManager : MonoBehaviour
     private string message = "Chemicalizer Controller";
     private GUIStyle messageStyle;
     private Rect messageRect;
-    public enum SectorState
+    private SectorState sentX;
+    private SectorState sentY;
+    private SectorState sentZ;
+
+    private float lastSendTime = 0f;
+    public float targetSendRate = 120f;   // 120Hzæ¨å¥¨ï¼ˆ80ã€œ200ã®é–“ã§èª¿æ•´ï¼‰
+    private float minInterval => 1f / targetSendRate;
+
+    public enum SectorState : byte
     {
-        None,
-        Tapped,
-        SlidedUp,
-        SlidedUpperRight,
-        SlidedRight,
-        SlidedLowerRight,
-        SlidedDown,
-        SlidedLowerLeft,
-        SlidedLeft,
-        SlidedUpperLeft
+        None = 0,
+        Tapped = 1,
+        SlidedUp = 2,
+        SlidedUpperRight = 3,
+        SlidedRight = 4,
+        SlidedLowerRight = 5,
+        SlidedDown = 6,
+        SlidedLowerLeft = 7,
+        SlidedLeft = 8,
+        SlidedUpperLeft = 9
     }
     // Start is called before the first frame update
     void Start()
@@ -31,12 +39,14 @@ public class ControllerManager : MonoBehaviour
         Screen.orientation = PlayerPrefs.GetInt("orientation", 0) == 0 ? ScreenOrientation.LandscapeLeft : ScreenOrientation.LandscapeRight;
         SectorSize = PlayerPrefs.GetFloat("size", 100.0f);
         SectorDistance = PlayerPrefs.GetFloat("distance", 500.0f);
-        Texture2D tentativeTexture = new Texture2D(1, 1);
+        Texture2D tentativeTexture = new(1, 1);
         tentativeTexture.SetPixel(0, 0, Color.white);
         tentativeTexture.Apply();
         texture = tentativeTexture;
-        style = new GUIStyle();
-        style.alignment = TextAnchor.MiddleCenter;
+        style = new GUIStyle
+        {
+            alignment = TextAnchor.MiddleCenter
+        };
         style.normal.textColor = Color.green;
         messageStyle = new GUIStyle();
         messageStyle.normal.textColor = Color.green;
@@ -68,8 +78,13 @@ public class ControllerManager : MonoBehaviour
                 sectorZ = UpdateSector(sectorZ, GetSectorState(touch));
             }
         }
+        if ((sectorX != sentX || sectorY != sentY || sectorZ != sentZ) &&
+                Time.time - lastSendTime >= minInterval)
+        {
+            SendInput(sectorX, sectorY, sectorZ);
+            lastSendTime = Time.time;
+        }
         message = "Chemicalizer Controller\n" + (isConnected ? "Connected" : "Disconnected");
-        SendInput(SectorStateToByte(sectorX), SectorStateToByte(sectorY), SectorStateToByte(sectorZ));
     }
     private SectorState GetSectorState(Touch touch)
     {
@@ -79,7 +94,7 @@ public class ControllerManager : MonoBehaviour
         }
         else if (touch.phase == TouchPhase.Moved)
         {
-            //“®‚¢‚½Šp“x‚É‚æ‚Á‚ÄƒXƒ‰ƒCƒhŒn‚ğ•Ô‚·
+            //å‹•ã„ãŸè§’åº¦ã«ã‚ˆã£ã¦ã‚¹ãƒ©ã‚¤ãƒ‰ç³»ã‚’è¿”ã™
             float angle = Vector2.SignedAngle(Vector2.right, touch.deltaPosition);
             if (angle >= 112.5f && angle < 157.5f)
             {
@@ -122,12 +137,12 @@ public class ControllerManager : MonoBehaviour
     }
     private SectorState UpdateSector(SectorState current, SectorState next)
     {
-        // Œ»İ‚ªNone‚È‚çŸ‚Ìó‘Ô‚ğ‚»‚Ì‚Ü‚Ü•Ô‚·
+        // ç¾åœ¨ãŒNoneãªã‚‰æ¬¡ã®çŠ¶æ…‹ã‚’ãã®ã¾ã¾è¿”ã™
         if (current == SectorState.None)
         {
             return next;
         }
-        // Œ»İ‚ªTapped‚È‚çŸ‚Ìó‘Ô‚ªƒXƒ‰ƒCƒhŒn‚È‚ç‚»‚Ì‚Ü‚Ü•Ô‚·B‚»‚¤‚Å‚È‚¢‚È‚çTapped‚ğˆÛ‚·‚é
+        // ç¾åœ¨ãŒTappedãªã‚‰æ¬¡ã®çŠ¶æ…‹ãŒã‚¹ãƒ©ã‚¤ãƒ‰ç³»ãªã‚‰ãã®ã¾ã¾è¿”ã™ã€‚ãã†ã§ãªã„ãªã‚‰Tappedã‚’ç¶­æŒã™ã‚‹
         if (current == SectorState.Tapped)
         {
             if (next == SectorState.SlidedUp)
@@ -164,7 +179,7 @@ public class ControllerManager : MonoBehaviour
             }
             return SectorState.Tapped;
         }
-        // Œ»İ‚ªƒXƒ‰ƒCƒhŒn‚È‚ç‘‚«Š·‚¦‚È‚¢
+        // ç¾åœ¨ãŒã‚¹ãƒ©ã‚¤ãƒ‰ç³»ãªã‚‰æ›¸ãæ›ãˆãªã„
         return current;
     }
     private void OnGUI()
@@ -183,45 +198,23 @@ public class ControllerManager : MonoBehaviour
         GUI.Label(SectorY, "Y", style);
         GUI.Label(SectorZ, "Z", style);
     }
-    private byte SectorStateToByte(SectorState state)
-    {
-        return state switch
-        {
-            SectorState.None => 0,
-            SectorState.Tapped => 1,
-            SectorState.SlidedUp => 2,
-            SectorState.SlidedUpperRight => 3,
-            SectorState.SlidedRight => 4,
-            SectorState.SlidedLowerRight => 5,
-            SectorState.SlidedDown => 6,
-            SectorState.SlidedLowerLeft => 7,
-            SectorState.SlidedLeft => 8,
-            SectorState.SlidedUpperLeft => 9,
-            _ => 0,
-        };
-    }
-    public struct InputData
-    {
-        public byte InputX;
-        public byte InputY;
-        public byte InputZ;
-    }
+
     private AndroidJavaObject usbManager;
     private AndroidJavaObject accessory;
     private AndroidJavaObject fileDescriptor;
     private AndroidJavaObject outputStream;
     private bool isConnected = false;
-    private InputData lastSentData;
+    private byte[] buffer = new byte[3];
     void OnApplicationFocus(bool hasFocus)
     {
         Debug.Log($"OnApplicationFocus: {hasFocus}");
         if (hasFocus)
             CheckAccessoryIntent();
     }
-    // V‚µ‚¢Intent‚ğó‚¯æ‚Á‚½‚Æ‚«‚ÉŒÄ‚Î‚ê‚é
+    // æ–°ã—ã„Intentã‚’å—ã‘å–ã£ãŸã¨ãã«å‘¼ã°ã‚Œã‚‹
     void OnNewIntent(AndroidJavaObject intent)
     {
-        Debug.Log("=== OnNewIntent ‚ªŒÄ‚Î‚ê‚Ü‚µ‚½ ===");
+        Debug.Log("=== OnNewIntent ãŒå‘¼ã°ã‚Œã¾ã—ãŸ ===");
         if (intent != null)
         {
             using (AndroidJavaClass unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
@@ -234,20 +227,20 @@ public class ControllerManager : MonoBehaviour
     }
     private void InitializeUsbManager()
     {
-        Debug.Log("InitializeUsbManager ‚ğŒÄ‚Ño‚µ‚Ä‚¢‚Ü‚·");
+        Debug.Log("InitializeUsbManager ã‚’å‘¼ã³å‡ºã—ã¦ã„ã¾ã™");
         using (AndroidJavaClass unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
         using (AndroidJavaObject activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
         {
             usbManager = activity.Call<AndroidJavaObject>("getSystemService", "usb");
-            Debug.Log($"usbManageræ“¾Œ‹‰Ê: {(usbManager != null ? "¬Œ÷" : "¸”s")}");
+            Debug.Log($"usbManagerå–å¾—çµæœ: {(usbManager != null ? "æˆåŠŸ" : "å¤±æ•—")}");
         }
     }
     private void CheckAccessoryIntent()
     {
-        Debug.Log("<color=yellow>=== CheckAccessoryIntent Às ===</color>");
+        Debug.Log("<color=yellow>=== CheckAccessoryIntent å®Ÿè¡Œ ===</color>");
         if (usbManager == null)
         {
-            Debug.LogWarning("usbManager ‚ª null ¨ Ä‰Šú‰»");
+            Debug.LogWarning("usbManager ãŒ null â†’ å†åˆæœŸåŒ–");
             InitializeUsbManager();
             if (usbManager == null) return;
         }
@@ -257,21 +250,21 @@ public class ControllerManager : MonoBehaviour
         {
             string action = intent.Call<string>("getAction");
             Debug.Log($"Intent Action: {action}");
-            // 1. Intent‚©‚ç’¼Ú
+            // 1. Intentã‹ã‚‰ç›´æ¥
             using (var usbManagerClass = new AndroidJavaClass("android.hardware.usb.UsbManager"))
             {
                 string extraAccessory = usbManagerClass.GetStatic<string>("EXTRA_ACCESSORY");
                 AndroidJavaObject accessoryObj = intent.Call<AndroidJavaObject>("getParcelableExtra", extraAccessory);
                 if (accessoryObj != null)
                 {
-                    Debug.Log("<color=green>Intent‚©‚çAccessoryæ“¾¬Œ÷I</color>");
+                    Debug.Log("<color=green>Intentã‹ã‚‰Accessoryå–å¾—æˆåŠŸï¼</color>");
                     accessory = accessoryObj;
                     OpenAccessory();
                     return;
                 }
             }
-            // 2. usbManager‚©‚ç’¼Úˆê——æ“¾id—vj
-            Debug.Log("AccessoryList ‚ğŠm”F’†...");
+            // 2. usbManagerã‹ã‚‰ç›´æ¥ä¸€è¦§å–å¾—ï¼ˆé‡è¦ï¼‰
+            Debug.Log("AccessoryList ã‚’ç¢ºèªä¸­...");
             AndroidJavaObject accessoryList = usbManager.Call<AndroidJavaObject>("getAccessoryList");
             if (accessoryList != null)
             {
@@ -282,59 +275,62 @@ public class ControllerManager : MonoBehaviour
                     accessory = accessoryList.Call<AndroidJavaObject>("get", 0);
                     if (accessory != null)
                     {
-                        Debug.Log("<color=green>AccessoryList‚©‚çæ“¾¬Œ÷I OpenAccessory‚ğÀs</color>");
+                        Debug.Log("<color=green>AccessoryListã‹ã‚‰å–å¾—æˆåŠŸï¼ OpenAccessoryã‚’å®Ÿè¡Œ</color>");
                         OpenAccessory();
                         return;
                     }
                 }
             }
-            Debug.LogWarning("Accessory‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñ‚Å‚µ‚½BPC‘¤‚ªAccessoryƒ‚[ƒh‚Å‘Ò‹@‚µ‚Ä‚¢‚é‚©Šm”F‚µ‚Ä‚­‚¾‚³‚¢B");
+            Debug.LogWarning("AccessoryãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“ã§ã—ãŸã€‚PCå´ãŒAccessoryãƒ¢ãƒ¼ãƒ‰ã§å¾…æ©Ÿã—ã¦ã„ã‚‹ã‹ç¢ºèªã—ã¦ãã ã•ã„ã€‚");
         }
     }
     private void OpenAccessory()
     {
-        Debug.Log("OpenAccessory ‚ğŠJn");
+        Debug.Log("OpenAccessory ã‚’é–‹å§‹");
         if (usbManager == null || accessory == null)
         {
-            Debug.LogError("OpenAccessory: usbManager ‚Ü‚½‚Í accessory ‚ª null");
+            Debug.LogError("OpenAccessory: usbManager ã¾ãŸã¯ accessory ãŒ null");
             return;
         }
         try
         {
-            Debug.Log("openAccessory ‚ğŒÄ‚Ño‚µ‚Ä‚¢‚Ü‚·...");
+            Debug.Log("openAccessory ã‚’å‘¼ã³å‡ºã—ã¦ã„ã¾ã™...");
             fileDescriptor = usbManager.Call<AndroidJavaObject>("openAccessory", accessory);
             if (fileDescriptor != null)
             {
-                Debug.Log("<color=green>openAccessory ¬Œ÷I</color>");
+                Debug.Log("<color=green>openAccessory æˆåŠŸï¼</color>");
                 var javaFileDescriptor = fileDescriptor.Call<AndroidJavaObject>("getFileDescriptor");
                 outputStream = new AndroidJavaObject("java.io.FileOutputStream", javaFileDescriptor);
                 isConnected = true;
-                Debug.Log("<color=green>=== USB AccessoryÚ‘± Š®—¹I ===</color>");
+                Debug.Log("<color=green>=== USB Accessoryæ¥ç¶š å®Œäº†ï¼ ===</color>");
                 SendInput(0, 0, 0);
             }
             else
             {
-                Debug.LogError("openAccessory ‚ª null ‚ğ•Ô‚µ‚Ü‚µ‚½");
+                Debug.LogError("openAccessory ãŒ null ã‚’è¿”ã—ã¾ã—ãŸ");
             }
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"OpenAccessory ƒGƒ‰[: {e.Message}\nStackTrace: {e.StackTrace}");
+            Debug.LogError($"OpenAccessory ã‚¨ãƒ©ãƒ¼: {e.Message}\nStackTrace: {e.StackTrace}");
         }
     }
-    // SendInput, SendData ‚Í‚»‚Ì‚Ü‚Üi•ÏX‚È‚µj
-    public void SendInput(byte x, byte y, byte z)
+    public void SendInput(SectorState x, SectorState y, SectorState z)
     {
         if (!isConnected || outputStream == null) return;
-        byte[] buffer = new byte[] { x, y, z };
+        buffer[0] = (byte)x;  // enum ãŒ byte ãªã®ã§ã‚­ãƒ£ã‚¹ãƒˆã§OKï¼ˆToByteé–¢æ•°ã‚’å‘¼ã¶å¿…è¦ãªã—ï¼‰
+        buffer[1] = (byte)y;
+        buffer[2] = (byte)z;
         try
         {
             outputStream.Call("write", buffer);
-            outputStream.Call("flush");
+            sentX = x;
+            sentY = y;
+            sentZ = z;
         }
         catch (System.Exception e)
         {
-            Debug.LogError("‘—MƒGƒ‰[: " + e.Message);
+            Debug.LogError("é€ä¿¡ã‚¨ãƒ©ãƒ¼: " + e.Message);
             isConnected = false;
         }
     }
