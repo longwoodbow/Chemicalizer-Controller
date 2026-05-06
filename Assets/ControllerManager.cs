@@ -1,9 +1,17 @@
-﻿using UnityEngine;
+﻿using System;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
+using UnityEngine;
 public class ControllerManager : MonoBehaviour
 {
     private Rect SectorX;
     private Rect SectorY;
     private Rect SectorZ;
+    private SectorState sentX;
+    private SectorState sentY;
+    private SectorState sentZ;
+
     public float SectorSize;
     public float SectorDistance;
     private Texture texture;
@@ -11,13 +19,32 @@ public class ControllerManager : MonoBehaviour
     private string message = "Chemicalizer Controller";
     private GUIStyle messageStyle;
     private Rect messageRect;
-    private SectorState sentX;
-    private SectorState sentY;
-    private SectorState sentZ;
 
+    private bool isConnected = false;
     private float lastSendTime = 0f;
     public float targetSendRate = 120f;   // 120Hz推奨（80〜200の間で調整）
+    private int discoveryPort = 50101;
+    private int inputPort = 51111;
+    private int settingPort = 51999;
+    private byte discoveryByte = 255;
+    private byte discoverySendByte = 254;
+    private byte heartBeatByte = 240;
+    private UdpClient discoveryClient;
+    private Thread discoveryThread;
+    private bool discoveryReceived = false;
+    private float lastDiscoveryTime = 0f;
+    private UdpClient inputClient;
+    private UdpClient settingClient;
+    private Thread listenThread;
+    private bool isRunning = true;
+    private string serverIP = "";
+    private float lastPhoneHeartBeatSent = 0f;
+    public float heartBeatInterval = 0.5f;
+    private bool recievedHeartBeat = false;
+    private float lastHeartBeatRecieved = 0f;
+    private float connectionTimeout = 3.0f;
     private float minInterval => 1f / targetSendRate;
+    private AndroidJavaObject multicastLock;
 
     public enum SectorState : byte
     {
@@ -37,8 +64,8 @@ public class ControllerManager : MonoBehaviour
     {
         Screen.sleepTimeout = SleepTimeout.NeverSleep;
         Screen.orientation = PlayerPrefs.GetInt("orientation", 0) == 0 ? ScreenOrientation.LandscapeLeft : ScreenOrientation.LandscapeRight;
-        SectorSize = PlayerPrefs.GetFloat("size", 100.0f);
-        SectorDistance = PlayerPrefs.GetFloat("distance", 500.0f);
+        SectorSize = PlayerPrefs.GetFloat("size", 200.0f);
+        SectorDistance = PlayerPrefs.GetFloat("distance", 600.0f);
         Texture2D tentativeTexture = new(1, 1);
         tentativeTexture.SetPixel(0, 0, Color.white);
         tentativeTexture.Apply();
@@ -51,14 +78,43 @@ public class ControllerManager : MonoBehaviour
         messageStyle = new GUIStyle();
         messageStyle.normal.textColor = Color.green;
         messageStyle.fontSize = Screen.height / 10;
-        messageRect = new Rect(10, 10, 10, 10);
-        Debug.Log("=== ControllerManager Start ===");
-        InitializeUsbManager();
-        CheckAccessoryIntent();
+        messageRect = new Rect(25, 25, 10, 10);
+
+        AcquireMulticastLock();
+        discoveryClient = new UdpClient();
+        discoveryClient.EnableBroadcast = true;
+        InvokeRepeating(nameof(SendDiscoveryPing), 0.5f, 1f);
+        discoveryThread = new Thread(ListenDiscovery);
+        discoveryThread.IsBackground = true;
+        discoveryThread.Start();
+        inputClient = new UdpClient();
+        settingClient = new UdpClient();
+        settingClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+        settingClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReceiveTimeout, 1000);
+        settingClient.Client.Bind(new IPEndPoint(IPAddress.Any, settingPort));
+        listenThread = new Thread(ListenFromPC);
+        listenThread.IsBackground = true;
+        listenThread.Start();
+        lastPhoneHeartBeatSent = Time.time;
     }
     // Update is called once per frame
     void Update()
     {
+        // Discovery / HeartBeatフラグ処理
+        if (discoveryReceived || recievedHeartBeat)
+        {
+            recievedHeartBeat = false;
+            discoveryReceived = false;
+            isConnected = true;
+            lastHeartBeatRecieved = Time.time;
+        }
+
+        // タイムアウトチェック
+        if (isConnected && Time.time - lastHeartBeatRecieved > connectionTimeout)
+        {
+            isConnected = false;
+            // Debug.Log("Connection timeout");   // スパム防止でコメントアウト推奨
+        }
         SectorState sectorX = SectorState.None;
         SectorState sectorY = SectorState.None;
         SectorState sectorZ = SectorState.None;
@@ -78,13 +134,32 @@ public class ControllerManager : MonoBehaviour
                 sectorZ = UpdateSector(sectorZ, GetSectorState(touch));
             }
         }
-        if ((sectorX != sentX || sectorY != sentY || sectorZ != sentZ) &&
-                Time.time - lastSendTime >= minInterval)
+        if (!string.IsNullOrEmpty(serverIP))
         {
-            SendInput(sectorX, sectorY, sectorZ);
-            lastSendTime = Time.time;
+            if (Time.time - lastPhoneHeartBeatSent >= heartBeatInterval)
+            {
+                SendPhoneHeartBeat();
+                lastPhoneHeartBeatSent = Time.time;
+            }
+
+            if ((sectorX != sentX || sectorY != sentY || sectorZ != sentZ) &&
+                    Time.time - lastSendTime >= minInterval)
+            {
+                try
+                {
+                    lastSendTime = Time.time;
+
+                    var endpoint = new IPEndPoint(IPAddress.Parse(serverIP), inputPort);
+                    byte[] data = { (byte)sectorX, (byte)sectorY, (byte)sectorZ };
+                    inputClient.Send(data, data.Length, endpoint);
+                    sentX = sectorX;
+                    sentY = sectorY;
+                    sentZ = sectorZ;
+                }
+                catch { }
+            }
         }
-        message = "Chemicalizer Controller\n" + (isConnected ? "Connected" : "Disconnected");
+        message = "Chemicalizer Controller\n" + (isConnected ? "Connected" : "Connecting...");
     }
     private SectorState GetSectorState(Touch touch)
     {
@@ -199,144 +274,145 @@ public class ControllerManager : MonoBehaviour
         GUI.Label(SectorZ, "Z", style);
     }
 
-    private AndroidJavaObject usbManager;
-    private AndroidJavaObject accessory;
-    private AndroidJavaObject fileDescriptor;
-    private AndroidJavaObject outputStream;
-    private bool isConnected = false;
-    private byte[] buffer = new byte[3];
-    void OnApplicationFocus(bool hasFocus)
+    void SendDiscoveryPing()
     {
-        Debug.Log($"OnApplicationFocus: {hasFocus}");
-        if (hasFocus)
-            CheckAccessoryIntent();
+        if (isConnected) return;
+        try
+        {
+            byte[] data = { discoverySendByte };
+            discoveryClient.Send(data, data.Length, new IPEndPoint(IPAddress.Broadcast, discoveryPort));
+        }
+        catch { }
     }
-    // 新しいIntentを受け取ったときに呼ばれる
-    void OnNewIntent(AndroidJavaObject intent)
+    private void SendPhoneHeartBeat()
     {
-        Debug.Log("=== OnNewIntent が呼ばれました ===");
-        if (intent != null)
+        if (string.IsNullOrEmpty(serverIP)) return;
+
+        try
+        {
+            byte[] data = { heartBeatByte };
+            var endpoint = new IPEndPoint(IPAddress.Parse(serverIP), inputPort);
+            inputClient.Send(data, data.Length, endpoint);
+        }
+        catch { }
+    }
+    void ListenDiscovery()
+    {
+        UdpClient listener = null;
+        try
+        {
+            listener = new UdpClient(discoveryPort);
+            listener.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+
+            while (isRunning)
+            {
+                try
+                {
+                    IPEndPoint remote = new IPEndPoint(IPAddress.Any, 0);
+                    byte[] data = listener.Receive(ref remote);
+
+                    if (data != null && data.Length == 1 && data[0] == discoveryByte)
+                    {
+                        serverIP = remote.Address.ToString();
+                        discoveryReceived = true;        // ここだけ
+                        lastHeartBeatRecieved = Time.time; // 念のため
+                    }
+                }
+                catch { }
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("ListenDiscovery setup failed: " + e.Message);
+        }
+        finally
+        {
+            listener?.Close();
+        }
+    }
+    private void ListenFromPC()
+    {
+        while (isRunning)
+        {
+            try
+            {
+                IPEndPoint remote = new IPEndPoint(IPAddress.Any, 0);
+                byte[] data = settingClient.Receive(ref remote);
+
+                if (data == null || data.Length == 0) continue;
+
+                if (data.Length == 1 && data[0] == heartBeatByte)
+                {
+                    recievedHeartBeat = true;
+                    isConnected = true;
+                    discoveryReceived = true;
+                    Debug.Log($"[Phone] Heartbeat received from {remote.Address}");
+                }
+                else if (data.Length == 9)
+                {
+                    Debug.Log($"[Phone] Setting data received ({data.Length} bytes)");
+                    byte orientation = data[0];
+                    Screen.orientation = orientation == 0 ? ScreenOrientation.LandscapeLeft : ScreenOrientation.LandscapeRight;
+                    PlayerPrefs.SetInt("orientation", orientation);
+                    float size = BitConverter.ToSingle(data, 1);
+                    SectorSize = size;
+                    PlayerPrefs.SetFloat("size", size);
+                    float distance = BitConverter.ToSingle(data, 5);
+                    SectorDistance = distance;
+                    PlayerPrefs.SetFloat("distance", distance);
+                }
+                else
+                {
+                    Debug.Log($"[Phone] Unknown packet: {data.Length} bytes");
+                }
+            }
+            catch (Exception ex) when (isRunning)
+            {
+                Debug.LogWarning($"ListenFromPC Exception: {ex.Message}");
+            }
+        }
+    }
+    private void AcquireMulticastLock()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        try
         {
             using (AndroidJavaClass unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
             using (AndroidJavaObject activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+            using (AndroidJavaObject wifiManager = activity.Call<AndroidJavaObject>("getSystemService", "wifi"))
             {
-                activity.Call("setIntent", intent);
-            }
-            CheckAccessoryIntent();
-        }
-    }
-    private void InitializeUsbManager()
-    {
-        Debug.Log("InitializeUsbManager を呼び出しています");
-        using (AndroidJavaClass unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
-        using (AndroidJavaObject activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
-        {
-            usbManager = activity.Call<AndroidJavaObject>("getSystemService", "usb");
-            Debug.Log($"usbManager取得結果: {(usbManager != null ? "成功" : "失敗")}");
-        }
-    }
-    private void CheckAccessoryIntent()
-    {
-        Debug.Log("<color=yellow>=== CheckAccessoryIntent 実行 ===</color>");
-        if (usbManager == null)
-        {
-            Debug.LogWarning("usbManager が null → 再初期化");
-            InitializeUsbManager();
-            if (usbManager == null) return;
-        }
-        using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
-        using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
-        using (var intent = activity.Call<AndroidJavaObject>("getIntent"))
-        {
-            string action = intent.Call<string>("getAction");
-            Debug.Log($"Intent Action: {action}");
-            // 1. Intentから直接
-            using (var usbManagerClass = new AndroidJavaClass("android.hardware.usb.UsbManager"))
-            {
-                string extraAccessory = usbManagerClass.GetStatic<string>("EXTRA_ACCESSORY");
-                AndroidJavaObject accessoryObj = intent.Call<AndroidJavaObject>("getParcelableExtra", extraAccessory);
-                if (accessoryObj != null)
-                {
-                    Debug.Log("<color=green>IntentからAccessory取得成功！</color>");
-                    accessory = accessoryObj;
-                    OpenAccessory();
-                    return;
-                }
-            }
-            // 2. usbManagerから直接一覧取得（重要）
-            Debug.Log("AccessoryList を確認中...");
-            AndroidJavaObject accessoryList = usbManager.Call<AndroidJavaObject>("getAccessoryList");
-            if (accessoryList != null)
-            {
-                int length = accessoryList.Call<int>("getLength");
-                Debug.Log($"<color=cyan>Accessory List Length: {length}</color>");
-                if (length > 0)
-                {
-                    accessory = accessoryList.Call<AndroidJavaObject>("get", 0);
-                    if (accessory != null)
-                    {
-                        Debug.Log("<color=green>AccessoryListから取得成功！ OpenAccessoryを実行</color>");
-                        OpenAccessory();
-                        return;
-                    }
-                }
-            }
-            Debug.LogWarning("Accessoryが見つかりませんでした。PC側がAccessoryモードで待機しているか確認してください。");
-        }
-    }
-    private void OpenAccessory()
-    {
-        Debug.Log("OpenAccessory を開始");
-        if (usbManager == null || accessory == null)
-        {
-            Debug.LogError("OpenAccessory: usbManager または accessory が null");
-            return;
-        }
-        try
-        {
-            Debug.Log("openAccessory を呼び出しています...");
-            fileDescriptor = usbManager.Call<AndroidJavaObject>("openAccessory", accessory);
-            if (fileDescriptor != null)
-            {
-                Debug.Log("<color=green>openAccessory 成功！</color>");
-                var javaFileDescriptor = fileDescriptor.Call<AndroidJavaObject>("getFileDescriptor");
-                outputStream = new AndroidJavaObject("java.io.FileOutputStream", javaFileDescriptor);
-                isConnected = true;
-                Debug.Log("<color=green>=== USB Accessory接続 完了！ ===</color>");
-                SendInput(0, 0, 0);
-            }
-            else
-            {
-                Debug.LogError("openAccessory が null を返しました");
+                multicastLock = wifiManager.Call<AndroidJavaObject>("createMulticastLock", "ChemicalizerMulticastLock");
+                multicastLock.Call("setReferenceCounted", true);
+                multicastLock.Call("acquire");
             }
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"OpenAccessory エラー: {e.Message}\nStackTrace: {e.StackTrace}");
+            Debug.LogError("Failed to acquire MulticastLock: " + e.Message);
         }
-    }
-    public void SendInput(SectorState x, SectorState y, SectorState z)
-    {
-        if (!isConnected || outputStream == null) return;
-        buffer[0] = (byte)x;  // enum が byte なのでキャストでOK（ToByte関数を呼ぶ必要なし）
-        buffer[1] = (byte)y;
-        buffer[2] = (byte)z;
-        try
-        {
-            outputStream.Call("write", buffer);
-            sentX = x;
-            sentY = y;
-            sentZ = z;
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError("送信エラー: " + e.Message);
-            isConnected = false;
-        }
+#endif
     }
     void OnApplicationQuit()
     {
-        outputStream?.Call("close");
-        fileDescriptor?.Call("close");
+        ReleaseMulticastLock();
+        isRunning = false;
+        discoveryClient?.Close();
+        inputClient?.Close();
+    }
+    private void ReleaseMulticastLock()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        try
+        {
+            if (multicastLock != null)
+            {
+                multicastLock.Call("release");
+                multicastLock.Dispose();
+                multicastLock = null;
+                Debug.Log("MulticastLock released");
+            }
+        }
+        catch { }
+#endif
     }
 }
