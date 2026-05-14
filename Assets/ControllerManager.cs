@@ -22,7 +22,7 @@ public class ControllerManager : MonoBehaviour
 
     private bool isConnected = false;
     private float lastSendTime = 0f;
-    public float targetSendRate = 120f;   // 120Hz推奨（80〜200の間で調整）
+    public float targetSendRate = 120f;
     private int discoveryPort = 50101;
     private int inputPort = 51111;
     private int settingPort = 51999;
@@ -63,9 +63,8 @@ public class ControllerManager : MonoBehaviour
     void Start()
     {
         Screen.sleepTimeout = SleepTimeout.NeverSleep;
-        Screen.orientation = PlayerPrefs.GetInt("orientation", 0) == 0 ? ScreenOrientation.LandscapeLeft : ScreenOrientation.LandscapeRight;
         SectorSize = PlayerPrefs.GetFloat("size", 200.0f);
-        SectorDistance = PlayerPrefs.GetFloat("distance", 600.0f);
+        SectorDistance = PlayerPrefs.GetFloat("distance", 400.0f);
         Texture2D tentativeTexture = new(1, 1);
         tentativeTexture.SetPixel(0, 0, Color.white);
         tentativeTexture.Apply();
@@ -88,10 +87,8 @@ public class ControllerManager : MonoBehaviour
         discoveryThread.IsBackground = true;
         discoveryThread.Start();
         inputClient = new UdpClient();
-        settingClient = new UdpClient();
-        settingClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-        settingClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReceiveTimeout, 1000);
-        settingClient.Client.Bind(new IPEndPoint(IPAddress.Any, settingPort));
+        settingClient = new UdpClient(settingPort);
+        settingClient.Client.ReceiveTimeout = 1000;
         listenThread = new Thread(ListenFromPC);
         listenThread.IsBackground = true;
         listenThread.Start();
@@ -262,12 +259,12 @@ public class ControllerManager : MonoBehaviour
         GUI.Label(messageRect, message, messageStyle);
         float centerX = Screen.width / 2.0f;
         float centerY = Screen.height / 2.0f;
-        SectorX = new Rect(centerX - SectorDistance - SectorSize / 2.0f, centerY - SectorSize / 2.0f, SectorSize, SectorSize);
-        SectorY = new Rect(centerX - SectorSize / 2.0f, centerY - SectorSize / 2.0f, SectorSize, SectorSize);
-        SectorZ = new Rect(centerX + SectorDistance - SectorSize / 2.0f, centerY - SectorSize / 2.0f, SectorSize, SectorSize);
-        GUI.DrawTexture(SectorX, texture, ScaleMode.StretchToFill, true, 0.0f, Color.white, 0.0f, 0.0f);
-        GUI.DrawTexture(SectorY, texture, ScaleMode.StretchToFill, true, 0.0f, Color.white, 0.0f, 0.0f);
-        GUI.DrawTexture(SectorZ, texture, ScaleMode.StretchToFill, true, 0.0f, Color.white, 0.0f, 0.0f);
+        SectorX = new Rect(centerX - SectorDistance - SectorSize * 1.5f, centerY - SectorSize / 2.0f, SectorSize, SectorSize);
+        SectorY = new Rect(centerX - SectorSize * 0.5f, centerY - SectorSize / 2.0f, SectorSize, SectorSize);
+        SectorZ = new Rect(centerX + SectorDistance + SectorSize * 0.5f, centerY - SectorSize / 2.0f, SectorSize, SectorSize);
+        GUI.DrawTexture(SectorX, texture, ScaleMode.StretchToFill, true, 0.0f, Color.green, 2.0f, 0.0f);
+        GUI.DrawTexture(SectorY, texture, ScaleMode.StretchToFill, true, 0.0f, Color.green, 2.0f, 0.0f);
+        GUI.DrawTexture(SectorZ, texture, ScaleMode.StretchToFill, true, 0.0f, Color.green, 2.0f, 0.0f);
         style.fontSize = (int)(SectorSize - 5.0f);
         GUI.Label(SectorX, "X", style);
         GUI.Label(SectorY, "Y", style);
@@ -339,36 +336,23 @@ public class ControllerManager : MonoBehaviour
                 IPEndPoint remote = new IPEndPoint(IPAddress.Any, 0);
                 byte[] data = settingClient.Receive(ref remote);
 
-                if (data == null || data.Length == 0) continue;
-
                 if (data.Length == 1 && data[0] == heartBeatByte)
                 {
                     recievedHeartBeat = true;
                     isConnected = true;
                     discoveryReceived = true;
-                    Debug.Log($"[Phone] Heartbeat received from {remote.Address}");
                 }
-                else if (data.Length == 9)
+                else if (data.Length == 8)
                 {
-                    Debug.Log($"[Phone] Setting data received ({data.Length} bytes)");
-                    byte orientation = data[0];
-                    Screen.orientation = orientation == 0 ? ScreenOrientation.LandscapeLeft : ScreenOrientation.LandscapeRight;
-                    PlayerPrefs.SetInt("orientation", orientation);
-                    float size = BitConverter.ToSingle(data, 1);
+                    float size = BitConverter.ToSingle(data, 0);
                     SectorSize = size;
-                    PlayerPrefs.SetFloat("size", size);
-                    float distance = BitConverter.ToSingle(data, 5);
+                    float distance = BitConverter.ToSingle(data, 4);
                     SectorDistance = distance;
-                    PlayerPrefs.SetFloat("distance", distance);
-                }
-                else
-                {
-                    Debug.Log($"[Phone] Unknown packet: {data.Length} bytes");
                 }
             }
-            catch (Exception ex) when (isRunning)
+            catch (Exception)
             {
-                Debug.LogWarning($"ListenFromPC Exception: {ex.Message}");
+                Thread.Sleep(1);
             }
         }
     }
@@ -394,10 +378,14 @@ public class ControllerManager : MonoBehaviour
     }
     void OnApplicationQuit()
     {
+        PlayerPrefs.SetFloat("size", SectorSize);
+        PlayerPrefs.SetFloat("distance", SectorDistance);
+        PlayerPrefs.Save();
         ReleaseMulticastLock();
         isRunning = false;
         discoveryClient?.Close();
         inputClient?.Close();
+        settingClient?.Close();
     }
     private void ReleaseMulticastLock()
     {
