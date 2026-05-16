@@ -376,11 +376,17 @@ public class ControllerManager : MonoBehaviour
         }
 #endif
     }
+    void OnApplicationPause(bool pause)
+    {
+        if (pause)
+        {
+            PlayerPrefs.SetFloat("size", SectorSize);
+            PlayerPrefs.SetFloat("distance", SectorDistance);
+            PlayerPrefs.Save();
+        }
+    }
     void OnApplicationQuit()
     {
-        PlayerPrefs.SetFloat("size", SectorSize);
-        PlayerPrefs.SetFloat("distance", SectorDistance);
-        PlayerPrefs.Save();
         ReleaseMulticastLock();
         isRunning = false;
         discoveryClient?.Close();
