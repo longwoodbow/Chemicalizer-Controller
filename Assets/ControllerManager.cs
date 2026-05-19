@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Threading;
 using UnityEngine;
@@ -274,12 +276,37 @@ public class ControllerManager : MonoBehaviour
     void SendDiscoveryPing()
     {
         if (isConnected) return;
+
         try
         {
             byte[] data = { discoverySendByte };
-            discoveryClient.Send(data, data.Length, new IPEndPoint(IPAddress.Broadcast, discoveryPort));
+
+            foreach (var ip in GetLocalIPs())
+            {
+                var bytes = ip.GetAddressBytes();
+                bytes[3] = 255;
+                var broadcast = new IPAddress(bytes);
+
+                discoveryClient.Send(data, data.Length, new IPEndPoint(broadcast, discoveryPort));
+            }
         }
         catch { }
+    }
+
+    List<IPAddress> GetLocalIPs()
+    {
+        List<IPAddress> list = new List<IPAddress>();
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (ni.OperationalStatus != OperationalStatus.Up) continue;
+
+            foreach (var ua in ni.GetIPProperties().UnicastAddresses)
+            {
+                if (ua.Address.AddressFamily == AddressFamily.InterNetwork)
+                    list.Add(ua.Address);
+            }
+        }
+        return list;
     }
     private void SendPhoneHeartBeat()
     {
