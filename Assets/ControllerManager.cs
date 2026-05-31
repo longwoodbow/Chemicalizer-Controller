@@ -21,10 +21,10 @@ public class ControllerManager : MonoBehaviour
     private string message = "Chemicalizer Controller";
     private GUIStyle messageStyle;
     private Rect messageRect;
+    public Font messageFont;
 
     private bool isConnected = false;
     private float lastSendTime = 0f;
-    public float targetSendRate = 120f;
     private int discoveryPort = 50101;
     private int inputPort = 51111;
     private int settingPort = 51999;
@@ -41,25 +41,24 @@ public class ControllerManager : MonoBehaviour
     private bool isRunning = true;
     private string serverIP = "";
     private float lastPhoneHeartBeatSent = 0f;
-    public float heartBeatInterval = 0.5f;
-    private bool recievedHeartBeat = false;
-    private float lastHeartBeatRecieved = 0f;
+    private float heartBeatInterval = 0.5f;
+    private bool receivedHeartBeat = false;
+    private float lastHeartBeatReceived = 0f;
     private float connectionTimeout = 3.0f;
-    private float minInterval => 1f / targetSendRate;
     private AndroidJavaObject multicastLock;
 
     public enum SectorState : byte
     {
         None = 0,
         Tapped = 1,
-        SlidedUp = 2,
-        SlidedUpperRight = 3,
-        SlidedRight = 4,
-        SlidedLowerRight = 5,
-        SlidedDown = 6,
-        SlidedLowerLeft = 7,
-        SlidedLeft = 8,
-        SlidedUpperLeft = 9
+        SlidUp = 2,
+        SlidUpperRight = 3,
+        SlidRight = 4,
+        SlidLowerRight = 5,
+        SlidDown = 6,
+        SlidLowerLeft = 7,
+        SlidLeft = 8,
+        SlidUpperLeft = 9
     }
     // Start is called before the first frame update
     void Start()
@@ -76,8 +75,10 @@ public class ControllerManager : MonoBehaviour
             alignment = TextAnchor.MiddleCenter
         };
         style.normal.textColor = Color.green;
+        style.font = messageFont;
         messageStyle = new GUIStyle();
         messageStyle.normal.textColor = Color.green;
+        messageStyle.font = messageFont;
         messageStyle.fontSize = Screen.height / 10;
         messageRect = new Rect(25, 25, 10, 10);
 
@@ -90,7 +91,7 @@ public class ControllerManager : MonoBehaviour
         discoveryThread.Start();
         inputClient = new UdpClient();
         settingClient = new UdpClient(settingPort);
-        settingClient.Client.ReceiveTimeout = 1000;
+        settingClient.Client.ReceiveTimeout = 5;
         listenThread = new Thread(ListenFromPC);
         listenThread.IsBackground = true;
         listenThread.Start();
@@ -100,19 +101,18 @@ public class ControllerManager : MonoBehaviour
     void Update()
     {
         // Discovery / HeartBeatフラグ処理
-        if (discoveryReceived || recievedHeartBeat)
+        if (discoveryReceived || receivedHeartBeat)
         {
-            recievedHeartBeat = false;
+            receivedHeartBeat = false;
             discoveryReceived = false;
             isConnected = true;
-            lastHeartBeatRecieved = Time.time;
+            lastHeartBeatReceived = Time.time;
         }
 
         // タイムアウトチェック
-        if (isConnected && Time.time - lastHeartBeatRecieved > connectionTimeout)
+        if (isConnected && Time.time - lastHeartBeatReceived > connectionTimeout)
         {
             isConnected = false;
-            // Debug.Log("Connection timeout");   // スパム防止でコメントアウト推奨
         }
         SectorState sectorX = SectorState.None;
         SectorState sectorY = SectorState.None;
@@ -141,8 +141,7 @@ public class ControllerManager : MonoBehaviour
                 lastPhoneHeartBeatSent = Time.time;
             }
 
-            if ((sectorX != sentX || sectorY != sentY || sectorZ != sentZ) &&
-                    Time.time - lastSendTime >= minInterval)
+            if (sectorX != sentX || sectorY != sentY || sectorZ != sentZ)
             {
                 try
                 {
@@ -172,35 +171,35 @@ public class ControllerManager : MonoBehaviour
             float angle = Vector2.SignedAngle(Vector2.right, touch.deltaPosition);
             if (angle >= 112.5f && angle < 157.5f)
             {
-                return SectorState.SlidedUpperLeft;
+                return SectorState.SlidUpperLeft;
             }
             else if (angle >= 67.5f && angle < 112.5f)
             {
-                return SectorState.SlidedUp;
+                return SectorState.SlidUp;
             }
             else if (angle >= 22.5f && angle < 67.5f)
             {
-                return SectorState.SlidedUpperRight;
+                return SectorState.SlidUpperRight;
             }
             else if (angle >= -22.5f && angle < 22.5f)
             {
-                return SectorState.SlidedRight;
+                return SectorState.SlidRight;
             }
             else if (angle >= -67.5f && angle < -22.5f)
             {
-                return SectorState.SlidedLowerRight;
+                return SectorState.SlidLowerRight;
             }
             else if (angle >= -112.5f && angle < -67.5f)
             {
-                return SectorState.SlidedDown;
+                return SectorState.SlidDown;
             }
             else if (angle >= -157.5f && angle < -112.5f)
             {
-                return SectorState.SlidedLowerLeft;
+                return SectorState.SlidLowerLeft;
             }
             else if (touch.deltaPosition != Vector2.zero)
             {
-                return SectorState.SlidedLeft;
+                return SectorState.SlidLeft;
             }
             else
             {
@@ -217,41 +216,9 @@ public class ControllerManager : MonoBehaviour
             return next;
         }
         // 現在がTappedなら次の状態がスライド系ならそのまま返す。そうでないならTappedを維持する
-        if (current == SectorState.Tapped)
+        else if (current == SectorState.Tapped && next != SectorState.None)
         {
-            if (next == SectorState.SlidedUp)
-            {
-                return next;
-            }
-            if (next == SectorState.SlidedUpperRight)
-            {
-                return next;
-            }
-            if (next == SectorState.SlidedRight)
-            {
-                return next;
-            }
-            if (next == SectorState.SlidedLowerRight)
-            {
-                return next;
-            }
-            if (next == SectorState.SlidedDown)
-            {
-                return next;
-            }
-            if (next == SectorState.SlidedLowerLeft)
-            {
-                return next;
-            }
-            if (next == SectorState.SlidedLeft)
-            {
-                return next;
-            }
-            if (next == SectorState.SlidedUpperLeft)
-            {
-                return next;
-            }
-            return SectorState.Tapped;
+            return next;
         }
         // 現在がスライド系なら書き換えない
         return current;
@@ -338,8 +305,8 @@ public class ControllerManager : MonoBehaviour
                     if (data != null && data.Length == 1 && data[0] == discoveryByte)
                     {
                         serverIP = remote.Address.ToString();
-                        discoveryReceived = true;        // ここだけ
-                        lastHeartBeatRecieved = Time.time; // 念のため
+                        discoveryReceived = true;
+                        lastHeartBeatReceived = Time.time;
                     }
                 }
                 catch { }
@@ -365,7 +332,7 @@ public class ControllerManager : MonoBehaviour
 
                 if (data.Length == 1 && data[0] == heartBeatByte)
                 {
-                    recievedHeartBeat = true;
+                    receivedHeartBeat = true;
                     isConnected = true;
                     discoveryReceived = true;
                 }

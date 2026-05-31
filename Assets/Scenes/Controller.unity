@@ -229,7 +229,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   SectorSize: 100
   SectorDistance: 300
-  targetSendRate: 120
+  messageFont: {fileID: 12800000, guid: d562bc6d6e6d10f4fab8ffe8f0bffdb7, type: 3}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
